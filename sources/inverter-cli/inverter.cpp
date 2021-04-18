@@ -68,10 +68,10 @@ int cInverter::GetMode() {
     return result;
 }
 
-bool cInverter::query(const char *cmd, int replysize) {
+bool cInverter::query(const char *cmd, int expectedReplySize) {
     time_t started;
     int fd;
-    int i=0, n;
+    int inverterReplySize = 0, n;
 
     fd = open(this->device.data(), O_RDWR | O_NONBLOCK);
     if (fd == -1) {
@@ -116,7 +116,8 @@ bool cInverter::query(const char *cmd, int replysize) {
     time(&started);
 
     do {
-        n = read(fd, (void*)buf+i, replysize-i);
+        bool earlyBreak = false;
+        n = read(fd, (void*) buf + inverterReplySize, expectedReplySize - inverterReplySize);
         if (n < 0) {
             if (time(NULL) - started > 2) {
                 lprintf("INVERTER: %s read timeout", cmd);
@@ -125,32 +126,48 @@ bool cInverter::query(const char *cmd, int replysize) {
                 usleep(10);
                 continue;
             }
+        } else {
+            for (int k = 0; k < n; k++) {
+                int bufferLookUpPosition = inverterReplySize + k;
+                char c = buf[bufferLookUpPosition];
+                if (c == '\r') {
+                    lprintf("INVERTER: %s early break, since caught an escape at index %d", cmd, bufferLookUpPosition);
+                    inverterReplySize = bufferLookUpPosition + 1; // convert to size from index
+                    earlyBreak = true;
+                    break;
+                } else if (bufferLookUpPosition == expectedReplySize) {
+                    lprintf("INVERTER: %s early break, since already read expected bytes (%d)", cmd, expectedReplySize);
+                    inverterReplySize = expectedReplySize;
+                    earlyBreak = true;
+                    break;
+                }
+            }
         }
-
-        i += n;
-    } while (i<replysize);
+        if (earlyBreak) break; // Terminate early, if already done.
+        inverterReplySize += n;
+    } while (inverterReplySize < expectedReplySize);
     close(fd);
 
-    if (i==replysize) {
+    if (inverterReplySize > 1) {
 
-        lprintf("INVERTER: %s reply size (%d bytes)", cmd, i);
+        lprintf("INVERTER: %s expected reply size (%d bytes), actual replySize (%d bytes)", cmd, expectedReplySize, inverterReplySize);
 
-        if (buf[0]!='(' || buf[replysize-1]!=0x0d) {
+        if (buf[0]!='(' || buf[inverterReplySize-1]!=0x0d) {
             lprintf("INVERTER: %s: incorrect start/stop bytes.  Buffer: %s", cmd, buf);
             return false;
         }
-        if (!(CheckCRC(buf, replysize))) {
-            lprintf("INVERTER: %s: CRC Failed!  Reply size: %d  Buffer: %s", cmd, replysize, buf);
+        if (!(CheckCRC(buf, inverterReplySize))) {
+            lprintf("INVERTER: %s: CRC Failed!  Reply size: %d  Buffer: %s", cmd, inverterReplySize, buf);
             return false;
         }
 
-        buf[i-3] = '\0'; //nullterminating on first CRC byte
-        lprintf("INVERTER: %s: %d bytes read: %s", cmd, i, buf);
+        buf[inverterReplySize-3] = '\0'; // nullterminating on first CRC byte
+        lprintf("INVERTER: %s: %d bytes read: %s", cmd, inverterReplySize, buf);
 
         lprintf("INVERTER: %s query finished", cmd);
         return true;
     } else {
-        lprintf("INVERTER: %s reply too short (%d bytes)", cmd, i);
+        lprintf("INVERTER: %s reply too short. Expected (%d bytes). Got (%d bytes).", cmd, inverterReplySize, expectedReplySize);
         return false;
     }
 }
