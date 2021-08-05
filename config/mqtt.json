@@ -5,6 +5,7 @@
     "devicename": "voltronic",
     "username": "",
     "password": "",
+    "clientid": "[SAMPLE_MQTT_ID]",
     "influx": {
         "enabled": "false",
         "host": "http://[INFLUX_IP_OR_URL]:8086", 
